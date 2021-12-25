@@ -127,18 +127,21 @@ values (1, 'uk100'),
  *   3) fact_inspection;
  ****************************************************************************************************************************** */
 
+-- dim_technician_group.
 insert into dim_technician_group(group_code)
 select distinct string_agg(employee_bk, '|' order by employee_bk)
 from stg_inspection
 group by inspection_id;
 
+-- bridge_technician_group.
 insert into bridge_technician_group(employee_group_sk, employee_sk)
-select distinct employee_group_sk,
+select distinct dim_technician_group.employee_group_sk,
                 dim_technician.employee_sk
 from dim_technician_group
 cross join unnest(string_to_array(group_code, '|')) as employee_bk
 inner join dim_technician on dim_technician.employee_bk = employee_bk.employee_bk;
 
+-- fact_inspection.
 with inspection_groups as (
     select inspection_id,
            string_agg(employee_bk, '|' order by employee_bk) as group_code
@@ -146,7 +149,7 @@ with inspection_groups as (
     group by inspection_id
 )
 insert into fact_inspection(inspection_id, employee_group_sk)
-select inspection_id,
+select inspection_groups.inspection_id,
        dim_technician_group.employee_group_sk
 from inspection_groups
 inner join dim_technician_group on inspection_groups.group_code = dim_technician_group.group_code;
@@ -189,3 +192,44 @@ values (21, 'uk102'),
  *   2) bridge_technician_group;
  *   3) fact_inspection;
  ****************************************************************************************************************************** */
+
+-- dim_technician_group.
+with inspection_groups as (
+    select inspection_id,
+           string_agg(employee_bk, '|' order by employee_bk) as group_code
+    from stg_inspection
+    group by inspection_id
+)
+insert into dim_technician_group(group_code)
+select distinct group_code
+from inspection_groups
+where
+      not exists(select 1 from dim_technician_group where dim_technician_group.group_code = inspection_groups.group_code);
+
+-- bridge_technician_group.
+insert into bridge_technician_group(employee_group_sk, employee_sk)
+select distinct dim_technician_group.employee_group_sk,
+                dim_technician.employee_sk
+from dim_technician_group
+         cross join unnest(string_to_array(group_code, '|')) as employee_bk
+         inner join dim_technician on dim_technician.employee_bk = employee_bk.employee_bk
+
+where
+    not exists(select 1 from bridge_technician_group
+               where bridge_technician_group.employee_sk = dim_technician.employee_sk and
+                     bridge_technician_group.employee_group_sk = dim_technician_group.employee_group_sk);
+
+-- fact_inspection.
+with inspection_groups as (
+    select inspection_id,
+           string_agg(employee_bk, '|' order by employee_bk) as group_code
+    from stg_inspection
+    group by inspection_id
+)
+insert into fact_inspection(inspection_id, employee_group_sk)
+select inspection_groups.inspection_id,
+       dim_technician_group.employee_group_sk
+from inspection_groups
+         inner join dim_technician_group on inspection_groups.group_code = dim_technician_group.group_code
+where
+      not exists(select 1 from fact_inspection where fact_inspection.inspection_id = inspection_groups.inspection_id);
